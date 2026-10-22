@@ -1,0 +1,22 @@
+# Segredos
+.env
+
+# Ambiente Python
+.venv/
+__pycache__/
+*.pyc
+
+# Saídas (contêm dados de usuários)
+relatorios/*
+retratos/*
+logs/*
+!relatorios/.gitkeep
+!retratos/.gitkeep
+!logs/.gitkeep
+
+# Certificados e exportações
+*.pfx
+*.cer
+
+# Arquivos temporários do Excel
+~$*
