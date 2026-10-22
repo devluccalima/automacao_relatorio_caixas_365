@@ -9,6 +9,7 @@ __pycache__/
 # Saídas (contêm dados de usuários)
 relatorios/*
 retratos/*
+config/*.csv
 logs/*
 !relatorios/.gitkeep
 !retratos/.gitkeep
