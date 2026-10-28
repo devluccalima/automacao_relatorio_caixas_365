@@ -9,11 +9,16 @@ __pycache__/
 # Saídas (contêm dados de usuários)
 relatorios/*
 retratos/*
-config/*.csv
 logs/*
 !relatorios/.gitkeep
 !retratos/.gitkeep
 !logs/.gitkeep
+config/*
+carga_inicial/padronizacao_*.xlsx
+
+# Alterações (contêm e-mails)
+alteracoes/
+carga_inicial/Alteracoes_*.xlsx
 
 # Certificados e exportações
 *.pfx
