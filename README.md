@@ -23,7 +23,7 @@ Só o passo 2 escreve no Exchange, e só o que estiver na aba Alterações.
 | 2 | Relatório no SharePoint e e-mail de resumo | SharePoint pronto; e-mail pendente |
 | 3 | Push pelo Alteracoes.xlsx (em simulação primeiro) | Pronto, em teste |
 | 4 | Carga inicial: planilha atual → aba Alterações | — |
-| 5 | Agendamento diário no servidor | — |
+| 5 | Agendamento diário no servidor | Em implantação |
 
 ## Estrutura
 
@@ -35,7 +35,7 @@ relatorio_caixas_m365/
 ├── config/
 │   ├── cargos_licencas.csv  Cargo;Perfil (fase 1; depois vem do SharePoint)
 │   ├── dominios_tenants.csv Dominio;Tenant novo
-│   ├── licencas.csv         SkuPartNumber;Nome;Paga (a ordem das linhas é a ordem de exibição)
+│   ├── licencas.csv         SkuPartNumber;Nome;Paga;PrecoMensal (a ordem das linhas é a ordem de exibição)
 │   ├── setores.csv          Lista padrão de setores (vazia = não valida)
 │   └── empreendimentos.csv  Lista padrão de empreendimentos (vazia = não valida)
 ├── core/
@@ -47,7 +47,8 @@ relatorio_caixas_m365/
 │   ├── leitura_tenant.py
 │   ├── analise.py
 │   └── relatorio.py
-├── scripts/                 aplicar_contatos.ps1 (Set-User com verificação)
+├── scripts/                 aplicar_contatos.ps1 (Set-User com verificação),
+│                            executar_automacao.ps1 (usado pelo Agendador), registrar_tarefa_agendada.ps1
 ├── carga_inicial/           padronizacao_final.xlsx (entrada) e Alteracoes_carga_inicial.xlsx (saída)
 ├── ferramentas/             listar_licencas.py, testar_sharepoint.py, carga_inicial.py
 ├── relatorios/              Saída (não versionado)
@@ -75,7 +76,8 @@ O Excel tem quatro abas:
 | Aba | Conteúdo |
 |---|---|
 | Resumo | Totais da execução, pendências por tipo e saldo das licenças pagas (compradas, em uso, livres) |
-| Caixas | O formato da planilha de caixas, com Licença 2026, Tenant Novo e Bloqueado já calculados |
+| Caixas | O formato da planilha de caixas, com Licença 2026, Tenant Novo, Bloqueado e o custo mensal atual e 2026 de cada conta |
+| Custos | Totais (mês e ano, atual e 2026, licenças sem uso, licenças em contas bloqueadas) e tabelas por licença atual, Licença 2026, tenant novo, empreendimento, setor e cargo |
 | Pendências | Cargo/setor/empreendimento vazio ou fora do padrão, espaço sobrando, licença diferente da prevista, domínio sem tenant, licença sem cadastro, bloqueada com licença paga |
 | Mudanças | O que mudou desde a execução anterior (entrou, saiu, campo alterado) |
 
@@ -87,7 +89,9 @@ Regras:
 - Cargo, domínio e licenças são comparados como o PROCX: sem diferenciar maiúsculas e ignorando espaços nas pontas.
 - A coluna Licenses mostra só licenças pagas, na ordem de `licencas.csv`. Licença que não está no arquivo aparece pelo
   código (SkuPartNumber), conta como paga e gera pendência.
-- Perfil "Desinstalar" na aba Cargos significa que a conta deveria estar sem licença paga.
+- Perfil "Desinstalar" na aba Cargos significa que a conta deveria estar sem licença paga (custo 2026 = 0).
+- Custos: preço mensal por licença em `licencas.csv` (aceita `70,73`). Uma combinação custa a soma das licenças.
+  Contas sem Licença 2026 entram na projeção com o custo atual. Licença paga sem preço conta 0 e aparece na aba Custos.
 - Cada execução grava um retrato em `retratos\`; os mais velhos que `RETENCAO_RETRATOS_DIAS` são apagados.
 
 ## Alterações (push)
@@ -140,6 +144,41 @@ $site = Get-MgSite -SiteId "<tenant>.sharepoint.com:/sites/<site>"
 $params = @{ roles = @("write"); grantedToIdentities = @(@{ application = @{ id = "<AZURE_CLIENT_ID>"; displayName = "Automacao-Caixas-M365" } }) }
 New-MgSitePermission -SiteId $site.Id -BodyParameter $params
 ```
+
+## Servidor e agendamento
+
+Roda no mesmo servidor e com a mesma conta de serviço da automação de contas inativas, que já tem o Python para todos os
+usuários, o módulo ExchangeOnlineManagement e o certificado do Exchange no perfil.
+
+1. Copie o projeto para `C:\Automacoes\automacao_relatorio_caixas` (sem `.venv`, `relatorios` e `logs`). Leve junto o
+   retrato mais recente de `retratos\`, para a aba Mudanças continuar comparando.
+2. No PowerShell elevado, na pasta do projeto:
+   ```powershell
+   & "C:\Program Files\Python313\python.exe" -m venv .venv
+   .\.venv\Scripts\python.exe -m pip install --upgrade pip
+   .\.venv\Scripts\python.exe -m pip install -r requirements.txt
+   icacls C:\Automacoes\automacao_relatorio_caixas /grant "SHOPPING\svc.autm365:(OI)(CI)M"
+   ```
+3. Copie o `.env` e trave as permissões dele:
+   `icacls .env /inheritance:r /grant "Administrators:(F)" /grant "SYSTEM:(F)" /grant "SHOPPING\svc.autm365:(R)"`
+4. Rede: além do que a automação de inativos já usa, saída HTTPS para `cscshoppingspauloctavio.sharepoint.com`.
+5. Teste como a conta de serviço: `.\.venv\Scripts\python.exe main.py`.
+6. Registre a tarefa: `.\scripts\registrar_tarefa_agendada.ps1 -Usuario "SHOPPING\svc.autm365"` (padrão: todo dia às 06:00).
+
+Acompanhar e operar (PowerShell elevado):
+
+```powershell
+Start-ScheduledTask -TaskName "Relatorio Caixas M365"
+Get-ScheduledTaskInfo -TaskName "Relatorio Caixas M365" | Select LastRunTime, LastTaskResult, NextRunTime
+Get-Content (Get-ChildItem logs\*.log | Sort LastWriteTime | Select -Last 1) -Tail 40
+Disable-ScheduledTask -TaskName "Relatorio Caixas M365"   # pausar (Enable- para voltar)
+```
+
+`LastTaskResult` 0 = sucesso; 267009 = em execução; 267011 = ainda não rodou.
+
+Depois da implantação, o servidor é o único lugar que roda o ciclo de verdade. No seu PC, para desenvolver, deixe
+`SHAREPOINT_SITE_ID` vazio no `.env`: assim o relatório e o `Alteracoes.xlsx` ficam só locais e nada concorre com o
+servidor.
 
 ## Permissões
 

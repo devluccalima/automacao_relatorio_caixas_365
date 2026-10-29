@@ -9,7 +9,8 @@ import pandas as pd
 from core.referencias import Referencias, chave
 
 COLUNAS = ["Display name", "User principal name", "Dominio", "Cargo", "Setor", "Empreendimento",
-           "Licenses", "Licença 2026", "Tenant Novo", "Bloqueado"]
+           "Licenses", "Licença 2026", "Tenant Novo", "Bloqueado", "Custo atual (mês)", "Custo 2026 (mês)"]
+CUSTO_ATUAL, CUSTO_2026 = "Custo atual (mês)", "Custo 2026 (mês)"
 CAMPOS_MUDANCA = ["Display name", "Cargo", "Setor", "Empreendimento", "Licenses", "Bloqueado"]
 SEM_PERFIL = "não encontrado"
 PERFIL_SEM_LICENCA = "desinstalar"
@@ -22,6 +23,8 @@ class Resultado:
     mudancas: pd.DataFrame
     totais: dict
     saldo_licencas: pd.DataFrame = None
+    custo_bloqueadas: float = 0.0          # licenças pagas em contas bloqueadas (fora do relatório)
+    licencas_sem_preco: set = None
 
 
 def _flag(nome: str, padrao: bool) -> bool:
@@ -33,12 +36,34 @@ def _licencas(skus: list[str], refs: Referencias) -> tuple[list[str], list[str],
     pagas, gratis, sem_cadastro = [], [], []
     for sku in skus:
         if sku.upper() in refs.licencas:
-            nome, paga, ordem = refs.licencas[sku.upper()]
+            nome, paga, ordem, _preco = refs.licencas[sku.upper()]
             (pagas if paga else gratis).append((ordem, nome))
         else:
             sem_cadastro.append(sku)
             pagas.append((999, sku))  # desconhecida conta como paga, para não sumir do relatório
     return [n for _, n in sorted(pagas)], [n for _, n in sorted(gratis)], sem_cadastro
+
+
+def custo(nomes: list[str], refs: Referencias, sem_preco: set) -> float:
+    """Soma o preço mensal das licenças (pelo nome). Licença sem preço conta 0 e é anotada."""
+    total = 0.0
+    for n in nomes:
+        n = n.strip()
+        if not n:
+            continue
+        if chave(n) in refs.precos:
+            total += refs.precos[chave(n)]
+        else:
+            sem_preco.add(n)
+    return round(total, 2)
+
+
+def custo_perfil(perfil: str, refs: Referencias, sem_preco: set) -> float | None:
+    if perfil == SEM_PERFIL:
+        return None
+    if chave(perfil) == PERFIL_SEM_LICENCA:
+        return 0.0
+    return custo(perfil.split("+"), refs, sem_preco)
 
 
 def _conjunto(texto: str) -> set[str]:
@@ -52,10 +77,14 @@ def saldo_licencas(skus: list[dict], refs: Referencias) -> pd.DataFrame:
         cad = refs.licencas.get(s["sku"].upper())
         if cad and not cad[1]:
             continue
+        preco = cad[3] if cad else None
+        livres = s["total"] - s["em_uso"]
         linhas.append({"Licença": cad[0] if cad else s["sku"], "Compradas": s["total"],
-                       "Em uso": s["em_uso"], "Livres": s["total"] - s["em_uso"],
+                       "Em uso": s["em_uso"], "Livres": livres, "Preço (mês)": preco,
+                       "Custo das livres (mês)": round(max(livres, 0) * preco, 2) if preco is not None else None,
                        "_ordem": cad[2] if cad else 999})
-    df = pd.DataFrame(linhas, columns=["Licença", "Compradas", "Em uso", "Livres", "_ordem"])
+    df = pd.DataFrame(linhas, columns=["Licença", "Compradas", "Em uso", "Livres", "Preço (mês)",
+                                       "Custo das livres (mês)", "_ordem"])
     return df.sort_values("_ordem").drop(columns="_ordem").reset_index(drop=True)
 
 
@@ -64,6 +93,8 @@ def analisar(contas: list[dict], refs: Referencias) -> Resultado:
     incluir_bloqueadas = _flag("INCLUIR_BLOQUEADAS", False)
 
     linhas, pend = [], []
+    sem_preco: set = set()
+    custo_bloqueadas = 0.0
 
     def pendencia(c, tipo, detalhe):
         pend.append({"User principal name": c["upn"], "Display name": c["nome"],
@@ -76,6 +107,7 @@ def analisar(contas: list[dict], refs: Referencias) -> Resultado:
         # Verificada em todas as contas, mesmo as que ficam fora do relatório
         if c["bloqueada"] and pagas:
             pendencia(c, "Bloqueada com licença paga", " + ".join(pagas))
+            custo_bloqueadas += custo(pagas, refs, sem_preco)
 
         if not pagas and not incluir_sem_paga:
             fora["sem licença paga"] += 1
@@ -94,6 +126,8 @@ def analisar(contas: list[dict], refs: Referencias) -> Resultado:
             "Empreendimento": c["empreendimento"].strip(), "Licenses": licenses,
             "Licença 2026": perfil, "Tenant Novo": tenant,
             "Bloqueado": "Sim" if c["bloqueada"] else "Não",
+            CUSTO_ATUAL: custo(pagas, refs, sem_preco),
+            CUSTO_2026: custo_perfil(perfil, refs, sem_preco),
         })
 
         # Pendências de cadastro
@@ -126,7 +160,40 @@ def analisar(contas: list[dict], refs: Referencias) -> Resultado:
     totais = {"contas no tenant": len(contas), "no relatório": len(caixas),
               "fora: sem licença paga": fora["sem licença paga"], "fora: bloqueadas": fora["bloqueadas"],
               "pendências": len(pendencias)}
-    return Resultado(caixas.reset_index(drop=True), pendencias, pd.DataFrame(), totais)
+    return Resultado(caixas.reset_index(drop=True), pendencias, pd.DataFrame(), totais,
+                     custo_bloqueadas=round(custo_bloqueadas, 2), licencas_sem_preco=sem_preco)
+
+
+# ---------------------------------------------------------------- custos
+
+AGRUPAMENTOS = [("Por licença atual", "Licenses"), ("Por Licença 2026", "Licença 2026"),
+                ("Por tenant novo", "Tenant Novo"), ("Por empreendimento", "Empreendimento"),
+                ("Por setor", "Setor"), ("Por cargo", "Cargo")]
+
+
+def projetar(caixas: pd.DataFrame) -> pd.DataFrame:
+    """Contas sem Licença 2026 (cargo vazio ou fora da lista) mantêm o custo atual na projeção."""
+    df = caixas.copy()
+    df[CUSTO_2026] = df[CUSTO_2026].fillna(df[CUSTO_ATUAL])
+    return df
+
+
+def custos(caixas: pd.DataFrame) -> list[tuple[str, pd.DataFrame]]:
+    """Tabelas de custo mensal agrupadas; ordenadas pelo custo atual, do maior para o menor."""
+    tabelas = []
+    base = projetar(caixas)
+    for titulo, coluna in AGRUPAMENTOS:
+        df = base.copy()
+        df[coluna] = df[coluna].replace("", "(vazio)")
+        g = df.groupby(coluna).agg(**{
+            "Contas": ("User principal name", "count"),
+            CUSTO_ATUAL: (CUSTO_ATUAL, "sum"),
+            CUSTO_2026: (CUSTO_2026, "sum"),
+        }).reset_index().rename(columns={coluna: titulo.replace("Por ", "").capitalize()})
+        g["Diferença (mês)"] = (g[CUSTO_2026] - g[CUSTO_ATUAL]).round(2)
+        g = g.sort_values(CUSTO_ATUAL, ascending=False).reset_index(drop=True)
+        tabelas.append((titulo, g))
+    return tabelas
 
 
 # ---------------------------------------------------------------- retratos

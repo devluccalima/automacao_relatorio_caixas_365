@@ -2,7 +2,7 @@
 
 - cargos_licencas.csv      Cargo;Perfil
 - dominios_tenants.csv     Dominio;Tenant novo
-- licencas.csv             SkuPartNumber;Nome;Paga   (a ordem das linhas é a ordem de exibição)
+- licencas.csv             SkuPartNumber;Nome;Paga;PrecoMensal  (a ordem das linhas é a ordem de exibição)
 - setores.csv              Setor            (opcional; vazio = não valida)
 - empreendimentos.csv      Empreendimento   (opcional; vazio = não valida)
 """
@@ -22,7 +22,8 @@ class Referencias:
     cargos: dict = field(default_factory=dict)          # chave(cargo) -> perfil
     nomes_cargos: dict = field(default_factory=dict)    # chave(cargo) -> grafia oficial
     tenants: dict = field(default_factory=dict)         # dominio -> tenant novo
-    licencas: dict = field(default_factory=dict)        # SKU em maiúsculas -> (nome, paga, ordem)
+    licencas: dict = field(default_factory=dict)        # SKU em maiúsculas -> (nome, paga, ordem, preço|None)
+    precos: dict = field(default_factory=dict)          # chave(nome da licença) -> preço mensal
     setores: dict = field(default_factory=dict)         # chave(setor) -> grafia oficial (vazio = não valida)
     empreendimentos: dict = field(default_factory=dict) # chave(empreendimento) -> grafia oficial
 
@@ -39,6 +40,16 @@ def _ler_csv(caminho: Path) -> pd.DataFrame:
     raise ValueError(f"Não consegui ler {caminho} (codificação desconhecida)")
 
 
+def _preco(valor: str) -> float | None:
+    """Aceita 70,73 / 70.73 / R$ 1.070,73. Vazio = sem preço."""
+    v = str(valor or "").replace("R$", "").strip()
+    if not v:
+        return None
+    if "," in v:
+        v = v.replace(".", "").replace(",", ".")
+    return float(v)
+
+
 def carregar(pasta: Path) -> Referencias:
     refs = Referencias()
     df = _ler_csv(pasta / "cargos_licencas.csv")
@@ -51,10 +62,12 @@ def carregar(pasta: Path) -> Referencias:
     refs.tenants = {d.lower(): t for d, t in zip(df["Dominio"], df["Tenant novo"]) if d}
 
     df = _ler_csv(pasta / "licencas.csv")
+    precos = df["PrecoMensal"] if "PrecoMensal" in df else [""] * len(df)
     refs.licencas = {
-        s.upper(): (n, p.lower() in ("sim", "s", "true", "1"), i)
-        for i, (s, n, p) in enumerate(zip(df["SkuPartNumber"], df["Nome"], df["Paga"]))
+        s.upper(): (n, p.lower() in ("sim", "s", "true", "1"), i, _preco(v))
+        for i, (s, n, p, v) in enumerate(zip(df["SkuPartNumber"], df["Nome"], df["Paga"], precos))
     }
+    refs.precos = {chave(n): v[3] for v in refs.licencas.values() for n in [v[0]] if v[3] is not None}
 
     df = _ler_csv(pasta / "setores.csv")
     refs.setores = {chave(v): v for v in df.get("Setor", []) if v}

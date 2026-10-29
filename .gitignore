@@ -13,7 +13,7 @@ logs/*
 !relatorios/.gitkeep
 !retratos/.gitkeep
 !logs/.gitkeep
-config/*
+config/*.csv
 carga_inicial/padronizacao_*.xlsx
 
 # Alterações (contêm e-mails)

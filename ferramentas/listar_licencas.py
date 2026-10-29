@@ -18,6 +18,10 @@ print(f"{'SkuPartNumber':<40}{'Em uso':>8}{'Total':>8}   Cadastro")
 for s in sorted(graph.get_paginado("/subscribedSkus"), key=lambda x: x["skuPartNumber"]):
     sku = s["skuPartNumber"]
     total = s.get("prepaidUnits", {}).get("enabled", 0)
-    cad = refs.licencas.get(sku)
-    situacao = f"{cad[0]} ({'paga' if cad[1] else 'gratuita'})" if cad else "FALTA CADASTRAR"
+    cad = refs.licencas.get(sku.upper())
+    if cad:
+        preco = f", R$ {cad[3]:.2f}/mês" if cad[3] is not None else (", SEM PREÇO" if cad[1] else "")
+        situacao = f"{cad[0]} ({'paga' if cad[1] else 'gratuita'}{preco})"
+    else:
+        situacao = "FALTA CADASTRAR"
     print(f"{sku:<40}{s.get('consumedUnits', 0):>8}{total:>8}   {situacao}")
