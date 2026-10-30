@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pandas as pd
 
+from core import autocorrecao
 from core.referencias import Referencias, chave
 
 COLUNAS = ["Display name", "User principal name", "Dominio", "Cargo", "Setor", "Empreendimento",
@@ -25,6 +26,8 @@ class Resultado:
     saldo_licencas: pd.DataFrame = None
     custo_bloqueadas: float = 0.0          # licenças pagas em contas bloqueadas (fora do relatório)
     licencas_sem_preco: set = None
+    autocorrecoes: list = None             # [{"E-mail", "Campo", "Valor"}]
+    sugestoes: list = None                 # linhas da aba Sugestões do Alteracoes.xlsx
 
 
 def _flag(nome: str, padrao: bool) -> bool:
@@ -93,6 +96,7 @@ def analisar(contas: list[dict], refs: Referencias) -> Resultado:
     incluir_bloqueadas = _flag("INCLUIR_BLOQUEADAS", False)
 
     linhas, pend = [], []
+    autos, sugestoes = [], []
     sem_preco: set = set()
     custo_bloqueadas = 0.0
 
@@ -130,18 +134,30 @@ def analisar(contas: list[dict], refs: Referencias) -> Resultado:
             CUSTO_2026: custo_perfil(perfil, refs, sem_preco),
         })
 
-        # Pendências de cadastro
+        # Pendências de cadastro e autocorreção
+        foras = {"Cargo": perfil == SEM_PERFIL,
+                 "Setor": bool(refs.setores) and chave(c["setor"]) not in refs.setores,
+                 "Empreendimento": bool(refs.empreendimentos) and chave(c["empreendimento"]) not in refs.empreendimentos}
+        nomes_pend = {"Cargo": "Cargo fora da aba Cargos", "Setor": "Setor fora da lista",
+                      "Empreendimento": "Empreendimento fora da lista"}
         for campo, valor in (("Cargo", c["cargo"]), ("Setor", c["setor"]), ("Empreendimento", c["empreendimento"])):
             if not valor.strip():
                 pendencia(c, f"{campo} vazio", "")
-            elif valor != valor.strip() or "  " in valor:
-                pendencia(c, f"{campo} com espaço sobrando", repr(valor))
-        if c["cargo"].strip() and perfil == SEM_PERFIL:
-            pendencia(c, "Cargo fora da aba Cargos", c["cargo"].strip())
-        if refs.setores and c["setor"].strip() and chave(c["setor"]) not in refs.setores:
-            pendencia(c, "Setor fora da lista", c["setor"].strip())
-        if refs.empreendimentos and c["empreendimento"].strip() and chave(c["empreendimento"]) not in refs.empreendimentos:
-            pendencia(c, "Empreendimento fora da lista", c["empreendimento"].strip())
+                continue
+            tipo, novo, semelhanca = autocorrecao.classificar(campo, valor, refs)
+            if tipo == "auto":
+                autos.append({"E-mail": c["upn"], "Campo": campo, "Valor": novo})
+                nota = f" → autocorreção para '{novo}'"
+            elif tipo == "sugestao":
+                sugestoes.append({"Aprovar (S)": "", "E-mail": c["upn"], "Display name": c["nome"], "Campo": campo,
+                                  "Valor atual": valor.strip(), "Sugestão": novo, "Semelhança": f"{semelhanca:.0%}"})
+                nota = f" → sugestão: '{novo}' ({semelhanca:.0%}), aprovar na aba Sugestões"
+            else:
+                nota = ""
+            if valor != valor.strip() or "  " in valor:
+                pendencia(c, f"{campo} com espaço sobrando", repr(valor) + nota)
+            elif foras[campo]:
+                pendencia(c, nomes_pend[campo], valor.strip() + nota)
         if tenant == SEM_PERFIL:
             pendencia(c, "Domínio sem tenant definido", dominio)
         for sku in sem_cadastro:
@@ -161,7 +177,8 @@ def analisar(contas: list[dict], refs: Referencias) -> Resultado:
               "fora: sem licença paga": fora["sem licença paga"], "fora: bloqueadas": fora["bloqueadas"],
               "pendências": len(pendencias)}
     return Resultado(caixas.reset_index(drop=True), pendencias, pd.DataFrame(), totais,
-                     custo_bloqueadas=round(custo_bloqueadas, 2), licencas_sem_preco=sem_preco)
+                     custo_bloqueadas=round(custo_bloqueadas, 2), licencas_sem_preco=sem_preco,
+                     autocorrecoes=autos, sugestoes=sugestoes)
 
 
 # ---------------------------------------------------------------- custos

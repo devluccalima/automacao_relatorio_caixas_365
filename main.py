@@ -1,8 +1,9 @@
 """Ciclo do relatório de caixas M365.
 
-1. Push: aplica as linhas do Alteracoes.xlsx (simulação enquanto DRY_RUN=true)
-2. Pull: lê as contas do Entra ID
-3. Análise: Licença 2026, tenant novo, pendências, mudanças
+1. Pull: lê as contas do Entra ID
+2. Análise: Licença 2026, tenant novo, custos, pendências, autocorreções e sugestões
+3. Push: aplica o Alteracoes.xlsx (Pendentes + autocorreções + sugestões aprovadas);
+   simulação enquanto DRY_RUN=true
 4. Relatório Excel local e no SharePoint
 
 Uso:
@@ -22,14 +23,19 @@ load_dotenv(RAIZ / ".env", override=True)
 sys.stdout.reconfigure(encoding="utf-8")
 
 
+def autocorrigir() -> bool:
+    return os.getenv("AUTOCORRIGIR", "true").strip().lower() not in ("false", "0", "nao", "não")
+
+
 def dry_run() -> bool:
     return os.getenv("DRY_RUN", "true").strip().lower() not in ("false", "0", "nao", "não")
 
 
 def imprimir_resumo_alteracoes(r: dict) -> None:
-    print(f"  pendentes: {r['pendentes']} | aplicadas: {r['aplicadas']} | sem mudança: {r['sem mudança']} | "
-          f"simuladas: {r['simuladas']} | erros: {r['erros']} | inválidas: {r['inválidas']} | "
-          f"aguardando: {r['aguardando']}")
+    print(f"  pendentes: {r['pendentes']} (autocorreções novas: {r['autocorreções']}, "
+          f"sugestões aprovadas: {r['sugestões aprovadas']}) | aplicadas: {r['aplicadas']} | "
+          f"sem mudança: {r['sem mudança']} | simuladas: {r['simuladas']} | erros: {r['erros']} | "
+          f"inválidas: {r['inválidas']} | aguardando: {r['aguardando']} | sugestões para aprovar: {r['sugestões']}")
 
 
 def somente_alteracoes(refs) -> None:
@@ -71,14 +77,6 @@ def main() -> None:
         somente_alteracoes(refs)
         return
 
-    resumo_alt = None
-    print(f"Processando alterações ({'simulação' if dry_run() else 'gravando'})...")
-    try:
-        resumo_alt = alteracoes.processar(refs, simular=dry_run())
-        imprimir_resumo_alteracoes(resumo_alt)
-    except Exception as e:  # o relatório sai mesmo se o push falhar
-        print(f"  ERRO nas alterações (o relatório continua): {e}")
-
     print("Lendo contas do Entra ID...")
     skus = leitura_tenant.ler_skus()
     contas = leitura_tenant.ler_contas(skus)
@@ -86,9 +84,19 @@ def main() -> None:
 
     resultado = analise.analisar(contas, refs)
     resultado.saldo_licencas = analise.saldo_licencas(skus, refs)
-    if resumo_alt:
-        for k in ("aplicadas", "simuladas", "erros", "inválidas", "aguardando"):
+
+    autos = resultado.autocorrecoes if autocorrigir() else []
+    print(f"Processando alterações ({'simulação' if dry_run() else 'gravando'}; "
+          f"{len(autos)} autocorreções e {len(resultado.sugestoes)} sugestões encontradas)...")
+    try:
+        resumo_alt = alteracoes.processar(refs, simular=dry_run(), autocorrecoes=autos,
+                                          sugestoes=resultado.sugestoes)
+        imprimir_resumo_alteracoes(resumo_alt)
+        for k in ("aplicadas", "simuladas", "erros", "inválidas", "aguardando", "sugestões"):
             resultado.totais[f"alterações: {k}"] = resumo_alt[k]
+    except Exception as e:  # o relatório sai mesmo se o push falhar
+        print(f"  ERRO nas alterações (o relatório continua): {e}")
+
     analise.comparar_com_retrato(resultado, RAIZ / "retratos")
     caminho = relatorio.gerar(resultado, RAIZ / "relatorios")
 

@@ -42,6 +42,7 @@ relatorio_caixas_m365/
 │   ├── graph.py             Autenticação e chamadas ao Graph (com nova tentativa em 429/5xx)
 │   ├── sharepoint.py        Sobe e baixa arquivos da pasta do site (Sites.Selected)
 │   ├── alteracoes.py        Push: lê, valida e aplica o Alteracoes.xlsx
+│   ├── autocorrecao.py      Classifica valores: oficial, autocorreção, sugestão ou sem correspondência
 │   ├── exchange.py          Chama o scripts\aplicar_contatos.ps1
 │   ├── referencias.py
 │   ├── leitura_tenant.py
@@ -115,6 +116,25 @@ relatório da execução seguinte.
 
 Rodar só as alterações, na hora: `python main.py --somente-alteracoes`. Sempre simula primeiro e mostra o resultado;
 com `DRY_RUN=false`, pede para digitar APLICAR antes de gravar.
+
+### Autocorreção e sugestões
+
+A cada execução, cada cargo, setor e empreendimento das contas do relatório é comparado com as listas oficiais
+(`core\autocorrecao.py`):
+
+| Caso | Exemplo | O que acontece |
+|---|---|---|
+| Só caixa, acento, espaço, "(a)", feminino/masculino ou abreviação | "arquiteta", "Coord. de TI", "brasilia shopping" | **Autocorreção**: entra em Pendentes com Observação "Autocorreção" e é aplicada na mesma execução |
+| Está em `config\apelidos.csv` | "Tec. Segurança do Trabalho" | **Autocorreção** (é uma decisão sua já registrada) |
+| Parecido com um valor oficial (≥ 80%) | "Gerente de Contrato", "Finaceiro" | **Sugestão**: vai para a aba Sugestões; só é aplicada se você escrever S em "Aprovar (S)" |
+| Nada parecido | "Cargo Maluco" | Continua só como pendência no relatório |
+
+A autocorreção nunca passa por cima de uma linha que alguém já colocou em Pendentes para a mesma conta.
+`AUTOCORRIGIR=false` no `.env` desliga a autocorreção (as sugestões continuam aparecendo).
+
+`config\apelidos.csv` (Campo;Valor errado;Valor correto;Observação) começou com as decisões da padronização.
+Para ensinar um erro novo, acrescente uma linha no repositório. As linhas com "Conferir" na Observação podem ter
+sido decisões para uma pessoa específica; se não valem como regra geral, apague-as.
 
 ### Carga inicial
 

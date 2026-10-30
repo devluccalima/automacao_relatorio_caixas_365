@@ -5,6 +5,7 @@
 - licencas.csv             SkuPartNumber;Nome;Paga;PrecoMensal  (a ordem das linhas é a ordem de exibição)
 - setores.csv              Setor            (opcional; vazio = não valida)
 - empreendimentos.csv      Empreendimento   (opcional; vazio = não valida)
+- apelidos.csv             Campo;Valor errado;Valor correto  (erros conhecidos, corrigidos automaticamente)
 """
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -26,6 +27,7 @@ class Referencias:
     precos: dict = field(default_factory=dict)          # chave(nome da licença) -> preço mensal
     setores: dict = field(default_factory=dict)         # chave(setor) -> grafia oficial (vazio = não valida)
     empreendimentos: dict = field(default_factory=dict) # chave(empreendimento) -> grafia oficial
+    apelidos: dict = field(default_factory=dict)        # campo -> {chave(valor errado): valor correto}
 
 
 def _ler_csv(caminho: Path) -> pd.DataFrame:
@@ -73,4 +75,9 @@ def carregar(pasta: Path) -> Referencias:
     refs.setores = {chave(v): v for v in df.get("Setor", []) if v}
     df = _ler_csv(pasta / "empreendimentos.csv")
     refs.empreendimentos = {chave(v): v for v in df.get("Empreendimento", []) if v}
+
+    df = _ler_csv(pasta / "apelidos.csv")
+    for campo, errado, certo in zip(df.get("Campo", []), df.get("Valor errado", []), df.get("Valor correto", [])):
+        if campo and errado and certo:
+            refs.apelidos.setdefault(campo.strip().capitalize(), {})[chave(errado)] = certo
     return refs
